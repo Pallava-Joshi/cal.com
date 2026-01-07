@@ -145,7 +145,7 @@ export default class HubspotCalendarService implements CRM {
       token.tokenType &&
       token.accessToken &&
       token.expiryDate &&
-      token.expiryDate > Date.now();
+      (token.expiresIn || token.expiryDate) < Date.now();
 
     const refreshAccessToken = async (refreshToken: string) => {
       try {
@@ -162,6 +162,7 @@ export default class HubspotCalendarService implements CRM {
           "hubspot",
           credential.userId
         );
+        // set expiry date as offset from current time.
         hubspotRefreshToken.expiryDate = Math.round(Date.now() + hubspotRefreshToken.expiresIn * 1000);
         await prisma.credential.update({
           where: {
@@ -348,6 +349,39 @@ private async setContactOwner(contactId: string, ownerId: string): Promise<void>
     this.log.error("Error setting contact owner:", error);
   }
 }
+
+  private async getContactOwnerId(contactId: string): Promise<string | null> {
+    try {
+      const contact = await this.hubspotClient.crm.contacts.basicApi.getById(contactId, [
+        "hubspot_owner_id",
+      ]);
+      return contact.properties.hubspot_owner_id ?? null;
+    } catch (error) {
+      this.log.error("Error fetching contact owner:", error);
+      return null;
+    }
+  }
+
+  private async maybeSetContactOwner(
+    contactId: string,
+    ownerId: string,
+    overwriteContactOwner: boolean
+  ): Promise<void> {
+    if (overwriteContactOwner) {
+      await this.setContactOwner(contactId, ownerId);
+      return;
+    }
+
+    const currentOwnerId = await this.getContactOwnerId(contactId);
+    if (!currentOwnerId) {
+      await this.setContactOwner(contactId, ownerId);
+    } else {
+      this.log.debug("Contact already has an owner, skipping owner assignment", {
+        contactId,
+        currentOwnerId,
+      });
+    }
+  }
 
   private async getContactOwnerId(contactId: string): Promise<string | null> {
     try {
